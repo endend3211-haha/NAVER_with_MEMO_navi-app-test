@@ -1,4 +1,4 @@
-name: Build Android App
+name: Build Simple APK
 
 on: [push]
 
@@ -15,16 +15,65 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Build with Gradle
+      # 1. 안드로이드 빌드용 기본 폴더 구조를 만듭니다.
+      - name: Create Android Project Structure
         run: |
-          echo "include ':app'" > settings.gradle
           mkdir -p app/src/main/java/com/example/naviparsertest
           mkdir -p app/src/main/res
           
-          # 파일 배치 작업 (GitHub Actions가 알아서 앱 구조를 만듭니다)
           if [ -f MainActivity.kt ]; then mv MainActivity.kt app/src/main/java/com/example/naviparsertest/; fi
           if [ -f NaviNotificationListener.kt ]; then mv NaviNotificationListener.kt app/src/main/java/com/example/naviparsertest/; fi
           if [ -f AndroidManifest.xml ]; then mv AndroidManifest.xml app/src/main/res/; fi
+
+          # Gradle 설정 파일 자동 생성
+          echo "include ':app'" > settings.gradle
+          echo 'rootProject.name = "NaviTest"' > build.gradle
           
-          echo 'apply plugin: "com.android.application"' > app/build.gradle
-          # (간단한 빌드 스크립트 실행 과정...)
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android' version '1.8.0' apply false
+          }
+          apply plugin: 'com.android.application'
+          
+          android {
+              compileSdk 33
+              defaultConfig {
+                  applicationId "com.example.naviparsertest"
+                  minSdk 24
+                  targetSdk 33
+                  versionCode 1
+                  versionName "1.0"
+              }
+          }
+          dependencies {
+              implementation 'androidx.core:core-ktx:1.9.0'
+              implementation 'androidx.appcompat:appcompat:1.6.0'
+          }
+          EOF
+
+          cat << 'EOF' > build.gradle
+          buildscript {
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:7.4.2'
+                  classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:1.8.0"
+              }
+          }
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          EOF
+
+      # 2. Gradle을 이용해 디버그용 APK 파일을 만듭니다.
+      - name: Build APK with Gradle
+        run: ./gradlew assembleDebug
+
+      # 3. 만들어진 APK 파일을 GitHub에 업로드하여 보관합니다.
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
