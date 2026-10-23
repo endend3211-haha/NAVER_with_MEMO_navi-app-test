@@ -17,15 +17,12 @@ jobs:
 
       - name: Create Project Files Directly
         run: |
-          # 1. 안드로이드 필수 폴더 생성
           mkdir -p app/src/main/java/com/example/naviparsertest
           mkdir -p app/src/main/res
 
-          # 2. gradle.properties 설정 파일 생성 (에러 해결 핵심)
           echo "android.useAndroidX=true" > gradle.properties
           echo "android.enableJetifier=true" >> gradle.properties
 
-          # 3. AndroidManifest.xml 직접 생성
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -33,7 +30,7 @@ jobs:
 
               <application
                   android:allowBackup="true"
-                  android:label="네이버길안내테스트"
+                  android:label="네이버길안내테스트 v2"
                   android:supportsRtl="true"
                   android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
 
@@ -60,73 +57,281 @@ jobs:
           </manifest>
           EOF
 
-          # 4. MainActivity.kt 직접 생성
           cat << 'EOF' > app/src/main/java/com/example/naviparsertest/MainActivity.kt
           package com.example.naviparsertest
 
+          import android.content.BroadcastReceiver
+          import android.content.Context
           import android.content.Intent
+          import android.content.IntentFilter
+          import android.os.Build
           import android.os.Bundle
           import android.provider.Settings
-          import android.view.Gravity
           import android.widget.Button
+          import android.widget.CheckBox
           import android.widget.LinearLayout
+          import android.widget.ScrollView
           import android.widget.TextView
           import androidx.appcompat.app.AppCompatActivity
 
           class MainActivity : AppCompatActivity() {
+              private lateinit var logTextView: TextView
+
+              private val receiver = object : BroadcastReceiver() {
+                  override fun onReceive(context: Context?, intent: Intent?) {
+                      updateLogFromPrefs()
+                  }
+              }
+
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
+                  
+                  val prefs = getSharedPreferences("navi_prefs", Context.MODE_PRIVATE)
+
                   val layout = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      gravity = Gravity.CENTER
-                      setPadding(50, 50, 50, 50)
+                      setPadding(40, 40, 40, 40)
                   }
-                  val guideText = TextView(this).apply {
-                      text = "1. 아래 버튼을 눌러 권한 설정 화면으로 이동하세요.\n\n2. '네이버길안내테스트' 스위치를 켜주세요."
-                      textSize = 16f
-                  }
+
                   val permissionButton = Button(this).apply {
-                      text = "알림 읽기 권한 켜러 가기"
+                      text = "1. 알림 읽기 권한 켜러 가기 (v2 신버전)"
                       setOnClickListener {
                           startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                       }
                   }
-                  layout.addView(guideText)
+
+                  val allAppsCheck = CheckBox(this).apply {
+                      text = "테스트용: 모든 앱 알림 다 잡아보기 (체크 해제 시 네이버지도만)"
+                      isChecked = prefs.getBoolean("catch_all", false)
+                      setOnCheckedChangeListener { _, isChecked ->
+                          prefs.edit().putBoolean("catch_all", isChecked).apply()
+                      }
+                  }
+
+                  val refreshButton = Button(this).apply {
+                      text = "2. 지금 상단바에 떠있는 알림 즉시 긁어오기"
+                      setOnClickListener {
+                          sendBroadcast(Intent("com.example.naviparsertest.REQ_ACTIVE"))
+                          updateLogFromPrefs()
+                      }
+                  }
+
+                  val scrollView = ScrollView(this)
+                  logTextView = TextView(this).apply {
+                      textSize = 14f
+                      setPadding(0, 30, 0, 30)
+                  }
+                  scrollView.addView(logTextView)
+
                   layout.addView(permissionButton)
+                  layout.addView(allAppsCheck)
+                  layout.addView(refreshButton)
+                  layout.addView(scrollView)
                   setContentView(layout)
+
+                  val filter = IntentFilter("com.example.naviparsertest.NAVI_LOG")
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                      registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+                  } else {
+                      registerReceiver(receiver, filter)
+                  }
+                  
+                  updateLogFromPrefs()
+              }
+
+              override fun onResume() {
+                  super.onResume()
+                  updateLogFromPrefs()
+              }
+
+              private fun updateLogFromPrefs() {
+                  val prefs = getSharedPreferences("navi_prefs", Context.MODE_PRIVATE)
+                  val savedLog = prefs.getString("last_log", "아직 수신된 알림이 없습니다.\n\n[중요 체크사항]\n1. 네이버 지도 내비 실행 후 휴대폰 '홈 버튼'을 눌러 네이버 지도를 백그라운드(작은 창)로 내려야 상단바에 길안내 알림이 뜹니다!\n2. 그래도 안 뜨면 위의 '모든 앱 알림 다 잡아보기'를 체크해보세요.")
+                  logTextView.text = savedLog
+              }
+
+              override fun onDestroy() {
+                  super.onDestroy()
+                  unregisterReceiver(receiver)
               }
           }
           EOF
 
-          # 5. NaviNotificationListener.kt 직접 생성
           cat << 'EOF' > app/src/main/java/com/example/naviparsertest/NaviNotificationListener.kt
           package com.example.naviparsertest
 
+          import android.app.Notification
+          import android.content.BroadcastReceiver
+          import android.content.Context
+          import android.content.Intent
+          import android.content.IntentFilter
+          import android.os.Build
           import android.service.notification.NotificationListenerService
           import android.service.notification.StatusBarNotification
-          import android.util.Log
+          import java.io.ByteArrayOutputStream
+          import java.text.SimpleDateFormat
+          import java.util.Date
+          import java.util.Locale
 
           class NaviNotificationListener : NotificationListenerService() {
+
+              private val reqReceiver = object : BroadcastReceiver() {
+                  override fun onReceive(context: Context?, intent: Intent?) {
+                      try {
+                          val activeList = activeNotifications
+                          if (activeList != null && activeList.isNotEmpty()) {
+                              for (sbn in activeList) {
+                                  processNotification(sbn, isManual = true)
+                              }
+                          }
+                      } catch (e: Exception) {}
+                  }
+              }
+
+              override fun onCreate() {
+                  super.onCreate()
+                  val filter = IntentFilter("com.example.naviparsertest.REQ_ACTIVE")
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                      registerReceiver(reqReceiver, filter, Context.RECEIVER_EXPORTED)
+                  } else {
+                      registerReceiver(reqReceiver, filter)
+                  }
+              }
+
+              override fun onDestroy() {
+                  super.onDestroy()
+                  unregisterReceiver(reqReceiver)
+              }
+
               override fun onNotificationPosted(sbn: StatusBarNotification?) {
                   super.onNotificationPosted(sbn)
-                  val packageName = sbn?.packageName ?: return
-                  if (packageName == "com.nhn.android.nmap") {
-                      val extras = sbn.notification?.extras ?: return
-                      Log.d("NAVER_NAVI", "================ [네이버 길안내 알림 도착] ================")
-                      for (key in extras.keySet()) {
-                          val value = extras.get(key)
-                          val textValue = when (value) {
-                              is Array<*> -> value.contentToString()
-                              else -> value.toString()
-                          }
-                          Log.d("NAVER_NAVI", "항목이름: $key  ===>  내용: $textValue")
+                  if (sbn != null) {
+                      processNotification(sbn, isManual = false)
+                  }
+              }
+
+              private fun processNotification(sbn: StatusBarNotification, isManual: Boolean) {
+                  val packageName = sbn.packageName ?: return
+                  val prefs = getSharedPreferences("navi_prefs", Context.MODE_PRIVATE)
+                  val catchAll = prefs.getBoolean("catch_all", false)
+
+                  if (!catchAll && !packageName.contains("nmap") && !packageName.contains("naver")) {
+                      return
+                  }
+
+                  val extras = sbn.notification?.extras ?: return
+                  val sb = StringBuilder()
+                  val nowTime = SimpleDateFormat("HH:mm:ss", Locale.KOREA).format(Date())
+
+                  val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
+                  val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
+                  val subText = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString() ?: ""
+
+                  // 스마트 글라스용 패킷 미리 만들어보기 (naver_navigation.c 규격)
+                  val gmPacketHex = buildGlassNavPacket(title, text, subText)
+
+                  sb.append("[$nowTime 수신됨] ${if(isManual) "(수동스캔)" else ""}\n")
+                  sb.append("앱 패키지: $packageName\n")
+                  sb.append("----------------------------------\n")
+                  sb.append("★ 글라스 전송용 패킷(GM Frame):\n$gmPacketHex\n")
+                  sb.append("----------------------------------\n")
+
+                  for (key in extras.keySet()) {
+                      val value = extras.get(key)
+                      val textValue = when (value) {
+                          is Array<*> -> value.contentToString()
+                          else -> value.toString()
                       }
+                      sb.append("• $key : $textValue\n")
+                  }
+
+                  prefs.edit().putString("last_log", sb.toString()).apply()
+
+                  val intent = Intent("com.example.naviparsertest.NAVI_LOG")
+                  sendBroadcast(intent)
+              }
+
+              // naver_navigation.c 및 HUD_PROTOCOL.md 규격에 맞춘 바이너리 패킷 생성기
+              private fun buildGlassNavPacket(distRaw: String, textRaw: String, etaRaw: String): String {
+                  try {
+                      val appPayload = ByteArrayOutputStream()
+                      appPayload.write(2) // version = 2
+
+                      // 방향 판별 (0: 화살표, 1: 유턴, 2: 도착)
+                      val kind = when {
+                          textRaw.contains("유턴") -> 1
+                          textRaw.contains("도착") -> 2
+                          else -> 0
+                      }
+                      appPayload.write(kind)
+
+                      // 회전 각도 (0: 직진, 90: 우회전, -90: 좌회전)
+                      val angle: Short = when {
+                          textRaw.contains("우회전") -> 90
+                          textRaw.contains("좌회전") -> -90
+                          textRaw.contains("오른쪽") -> 45
+                          textRaw.contains("왼쪽") -> -45
+                          else -> 0
+                      }
+                      appPayload.write((angle.toInt() shr 8) and 0xFF)
+                      appPayload.write(angle.toInt() and 0xFF)
+
+                      fun writeField(str: String, maxLen: Int) {
+                          val bytes = str.toByteArray(Charsets.UTF_8)
+                          val len = bytes.size.coerceAtMost(maxLen)
+                          appPayload.write(len)
+                          appPayload.write(bytes, 0, len)
+                      }
+
+                      writeField(distRaw.ifEmpty { "0m" }, 16)   // dist
+                      writeField(textRaw.ifEmpty { "안내중" }, 200) // text
+                      writeField("", 8)                          // speed
+                      writeField("", 8)                          // remain
+                      writeField(etaRaw, 8)                      // eta
+                      val clk = SimpleDateFormat("HH:mm", Locale.KOREA).format(Date())
+                      writeField(clk, 8)                         // clock
+                      appPayload.write(0)                        // npts = 0 (미니맵 생략)
+
+                      val appBytes = appPayload.toByteArray()
+                      val n = appBytes.size
+                      val gmLen = 19 + n
+
+                      // HUD_PROTOCOL.md의 Application-message envelope 조립
+                      val frame = ByteArrayOutputStream()
+                      frame.write(0xFA)
+                      frame.write((gmLen shr 16) and 0xFF)
+                      frame.write((gmLen shr 8) and 0xFF)
+                      frame.write(gmLen and 0xFF)
+                      frame.write(0x01) // event ID
+                      frame.write(0x0F) // GM service 0F
+                      frame.write(0x28) // command 28
+                      
+                      // Channel TLV: 07 00 00 02 4E 56 (NAV_CHANNEL = 0x4E56)
+                      frame.write(byteArrayOf(0x07, 0x00, 0x00, 0x02, 0x4E, 0x56))
+                      
+                      // Bytes TLV: 01 + 24-bit length + appBytes
+                      frame.write(0x01)
+                      frame.write((n shr 16) and 0xFF)
+                      frame.write((n shr 8) and 0xFF)
+                      frame.write(n and 0xFF)
+                      frame.write(appBytes)
+
+                      val frameWithoutSum = frame.toByteArray()
+                      var sum = 0
+                      for (b in frameWithoutSum) {
+                          sum = (sum + (b.toInt() and 0xFF)) and 0xFFFF
+                      }
+                      frame.write((sum shr 8) and 0xFF)
+                      frame.write(sum and 0xFF)
+
+                      return frame.toByteArray().joinToString(" ") { "%02X".format(it) }
+                  } catch (e: Exception) {
+                      return "패킷 생성 실패: ${e.message}"
                   }
               }
           }
           EOF
 
-          # 6. Gradle 설정 파일 생성
           echo "include ':app'" > settings.gradle
           echo 'rootProject.name = "NaviTest"' > build.gradle
 
@@ -141,8 +346,8 @@ jobs:
                   applicationId "com.example.naviparsertest"
                   minSdk 24
                   targetSdk 33
-                  versionCode 1
-                  versionName "1.0"
+                  versionCode 2
+                  versionName "2.0"
               }
           }
           dependencies {
@@ -183,5 +388,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug
+          name: app-debug-v2
           path: app/build/outputs/apk/debug/app-debug.apk
