@@ -3,9 +3,9 @@
     package="com.example.naviparsertest">
 
     <application
-        android:allowBackup="true"
+        aandroid:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="네이버길안내테스트"
         android:supportsRtl="true"
         android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
