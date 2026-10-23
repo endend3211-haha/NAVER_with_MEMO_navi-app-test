@@ -28,9 +28,16 @@ jobs:
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.example.naviparsertest">
 
+              <!-- 블루투스 연결 권한 추가 -->
+              <uses-permission android:name="android.permission.BLUETOOTH" />
+              <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+              <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
               <application
                   android:allowBackup="true"
-                  android:label="네이버길안내테스트 v2"
+                  android:label="네이버길안내 글라스연동 v3"
                   android:supportsRtl="true"
                   android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
 
@@ -60,6 +67,10 @@ jobs:
           cat << 'EOF' > app/src/main/java/com/example/naviparsertest/MainActivity.kt
           package com.example.naviparsertest
 
+          import android.Manifest
+          import android.annotation.SuppressLint
+          import android.app.AlertDialog
+          import android.bluetooth.BluetoothAdapter
           import android.content.BroadcastReceiver
           import android.content.Context
           import android.content.Intent
@@ -68,14 +79,16 @@ jobs:
           import android.os.Bundle
           import android.provider.Settings
           import android.widget.Button
-          import android.widget.CheckBox
           import android.widget.LinearLayout
           import android.widget.ScrollView
           import android.widget.TextView
+          import android.widget.Toast
           import androidx.appcompat.app.AppCompatActivity
+          import androidx.core.app.ActivityCompat
 
           class MainActivity : AppCompatActivity() {
               private lateinit var logTextView: TextView
+              private lateinit var statusTextView: TextView
 
               private val receiver = object : BroadcastReceiver() {
                   override fun onReceive(context: Context?, intent: Intent?) {
@@ -85,8 +98,18 @@ jobs:
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
-                  
-                  val prefs = getSharedPreferences("navi_prefs", Context.MODE_PRIVATE)
+
+                  // 안드로이드 12 이상 블루투스 권한 요청
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                      ActivityCompat.requestPermissions(
+                          this,
+                          arrayOf(
+                              Manifest.permission.BLUETOOTH_CONNECT,
+                              Manifest.permission.BLUETOOTH_SCAN
+                          ),
+                          100
+                      )
+                  }
 
                   val layout = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
@@ -94,38 +117,43 @@ jobs:
                   }
 
                   val permissionButton = Button(this).apply {
-                      text = "1. 알림 읽기 권한 켜러 가기 (v2 신버전)"
+                      text = "1. 알림 읽기 권한 확인"
                       setOnClickListener {
                           startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                       }
                   }
 
-                  val allAppsCheck = CheckBox(this).apply {
-                      text = "테스트용: 모든 앱 알림 다 잡아보기 (체크 해제 시 네이버지도만)"
-                      isChecked = prefs.getBoolean("catch_all", false)
-                      setOnCheckedChangeListener { _, isChecked ->
-                          prefs.edit().putBoolean("catch_all", isChecked).apply()
+                  val selectGlassButton = Button(this).apply {
+                      text = "2. 블루투스 스마트 글라스 기기 선택"
+                      setOnClickListener {
+                          showPairedDevicesDialog()
                       }
                   }
 
-                  val refreshButton = Button(this).apply {
-                      text = "2. 지금 상단바에 떠있는 알림 즉시 긁어오기"
+                  val testSendButton = Button(this).apply {
+                      text = "3. 지금 상단바 알림 글라스로 즉시 전송!"
                       setOnClickListener {
                           sendBroadcast(Intent("com.example.naviparsertest.REQ_ACTIVE"))
-                          updateLogFromPrefs()
+                          Toast.makeText(this@MainActivity, "알림 스캔 및 글라스 전송 시도!", Toast.LENGTH_SHORT).show()
                       }
+                  }
+
+                  statusTextView = TextView(this).apply {
+                      textSize = 15f
+                      setPadding(0, 20, 0, 20)
                   }
 
                   val scrollView = ScrollView(this)
                   logTextView = TextView(this).apply {
                       textSize = 14f
-                      setPadding(0, 30, 0, 30)
+                      setPadding(0, 20, 0, 40)
                   }
                   scrollView.addView(logTextView)
 
                   layout.addView(permissionButton)
-                  layout.addView(allAppsCheck)
-                  layout.addView(refreshButton)
+                  layout.addView(selectGlassButton)
+                  layout.addView(testSendButton)
+                  layout.addView(statusTextView)
                   layout.addView(scrollView)
                   setContentView(layout)
 
@@ -135,8 +163,38 @@ jobs:
                   } else {
                       registerReceiver(receiver, filter)
                   }
-                  
+
                   updateLogFromPrefs()
+              }
+
+              @SuppressLint("MissingPermission")
+              private fun showPairedDevicesDialog() {
+                  try {
+                      val adapter = BluetoothAdapter.getDefaultAdapter()
+                      val pairedDevices = adapter?.bondedDevices
+                      if (pairedDevices.isNullOrEmpty()) {
+                          Toast.makeText(this, "페어링된 블루투스 기기가 없거나 권한이 없습니다.", Toast.LENGTH_LONG).show()
+                          return
+                      }
+
+                      val deviceNames = pairedDevices.map { "${it.name} (${it.address})" }.toTypedArray()
+                      val deviceAddresses = pairedDevices.map { it.address }.toTypedArray()
+
+                      AlertDialog.Builder(this)
+                          .setTitle("연결할 스마트 글라스를 선택하세요")
+                          .setItems(deviceNames) { _, which ->
+                              val prefs = getSharedPreferences("navi_prefs", Context.MODE_PRIVATE)
+                              prefs.edit()
+                                  .putString("glass_mac", deviceAddresses[which])
+                                  .putString("glass_name", deviceNames[which])
+                                  .apply()
+                              updateLogFromPrefs()
+                              Toast.makeText(this, "선택됨: ${deviceNames[which]}", Toast.LENGTH_SHORT).show()
+                          }
+                          .show()
+                  } catch (e: Exception) {
+                      Toast.makeText(this, "블루투스 권한을 먼저 허용해주세요: ${e.message}", Toast.LENGTH_LONG).show()
+                  }
               }
 
               override fun onResume() {
@@ -146,7 +204,11 @@ jobs:
 
               private fun updateLogFromPrefs() {
                   val prefs = getSharedPreferences("navi_prefs", Context.MODE_PRIVATE)
-                  val savedLog = prefs.getString("last_log", "아직 수신된 알림이 없습니다.\n\n[중요 체크사항]\n1. 네이버 지도 내비 실행 후 휴대폰 '홈 버튼'을 눌러 네이버 지도를 백그라운드(작은 창)로 내려야 상단바에 길안내 알림이 뜹니다!\n2. 그래도 안 뜨면 위의 '모든 앱 알림 다 잡아보기'를 체크해보세요.")
+                  val glassName = prefs.getString("glass_name", "선택 안 됨 (위 2번 버튼을 눌러 선택하세요)")
+                  val btStatus = prefs.getString("bt_status", "대기 중")
+                  statusTextView.text = "▶ 타겟 글라스: $glassName\n▶ 전송 상태: $btStatus"
+
+                  val savedLog = prefs.getString("last_log", "아직 수신된 알림이 없습니다.")
                   logTextView.text = savedLog
               }
 
@@ -160,7 +222,15 @@ jobs:
           cat << 'EOF' > app/src/main/java/com/example/naviparsertest/NaviNotificationListener.kt
           package com.example.naviparsertest
 
+          import android.annotation.SuppressLint
           import android.app.Notification
+          import android.bluetooth.BluetoothAdapter
+          import android.bluetooth.BluetoothGatt
+          import android.bluetooth.BluetoothGattCallback
+          import android.bluetooth.BluetoothGattCharacteristic
+          import android.bluetooth.BluetoothGattDescriptor
+          import android.bluetooth.BluetoothProfile
+          import android.bluetooth.BluetoothSocket
           import android.content.BroadcastReceiver
           import android.content.Context
           import android.content.Intent
@@ -172,14 +242,28 @@ jobs:
           import java.text.SimpleDateFormat
           import java.util.Date
           import java.util.Locale
+          import java.util.UUID
+          import kotlin.concurrent.thread
 
           class NaviNotificationListener : NotificationListenerService() {
+
+              companion object {
+                  // PROTOCOL.md에 명시된 글라스 통신용 UUID
+                  val SPP_GM_UUID: UUID = UUID.fromString("00007033-0000-1000-8000-00805f9b34fb")
+                  val SPP_FALLBACK_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805f9b34fb")
+                  val BLE_WRITE_UUID: UUID = UUID.fromString("00002021-0000-1000-8000-00805f9b34fb")
+                  val BLE_NOTIFY_UUID: UUID = UUID.fromString("00002022-0000-1000-8000-00805f9b34fb")
+                  val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+              }
+
+              private var sppSocket: BluetoothSocket? = null
+              private var eventSeq: Int = 1
 
               private val reqReceiver = object : BroadcastReceiver() {
                   override fun onReceive(context: Context?, intent: Intent?) {
                       try {
                           val activeList = activeNotifications
-                          if (activeList != null && activeList.isNotEmpty()) {
+                          if (!activeList.isNullOrEmpty()) {
                               for (sbn in activeList) {
                                   processNotification(sbn, isManual = true)
                               }
@@ -201,6 +285,7 @@ jobs:
               override fun onDestroy() {
                   super.onDestroy()
                   unregisterReceiver(reqReceiver)
+                  try { sppSocket?.close() } catch (e: Exception) {}
               }
 
               override fun onNotificationPosted(sbn: StatusBarNotification?) {
@@ -212,122 +297,234 @@ jobs:
 
               private fun processNotification(sbn: StatusBarNotification, isManual: Boolean) {
                   val packageName = sbn.packageName ?: return
-                  val prefs = getSharedPreferences("navi_prefs", Context.MODE_PRIVATE)
-                  val catchAll = prefs.getBoolean("catch_all", false)
-
-                  if (!catchAll && !packageName.contains("nmap") && !packageName.contains("naver")) {
-                      return
-                  }
+                  if (!packageName.contains("nmap") && !packageName.contains("naver")) return
 
                   val extras = sbn.notification?.extras ?: return
-                  val sb = StringBuilder()
+                  val prefs = getSharedPreferences("navi_prefs", Context.MODE_PRIVATE)
                   val nowTime = SimpleDateFormat("HH:mm:ss", Locale.KOREA).format(Date())
 
-                  val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
-                  val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
+                  // 네이버 지도 알림 구조에 맞게 정확히 매핑!
+                  // title에 안내문구("송도BT센터 방면으로..."), text/chipExpandedText에 거리("91m")가 들어옴
+                  val rawTitle = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
+                  val rawText = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
+                  val chipDist = extras.getCharSequence("android.ongoingActivityNoti.chipExpandedText")?.toString() ?: ""
                   val subText = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString() ?: ""
 
-                  // 스마트 글라스용 패킷 미리 만들어보기 (naver_navigation.c 규격)
-                  val gmPacketHex = buildGlassNavPacket(title, text, subText)
-
-                  sb.append("[$nowTime 수신됨] ${if(isManual) "(수동스캔)" else ""}\n")
-                  sb.append("앱 패키지: $packageName\n")
-                  sb.append("----------------------------------\n")
-                  sb.append("★ 글라스 전송용 패킷(GM Frame):\n$gmPacketHex\n")
-                  sb.append("----------------------------------\n")
-
-                  for (key in extras.keySet()) {
-                      val value = extras.get(key)
-                      val textValue = when (value) {
-                          is Array<*> -> value.contentToString()
-                          else -> value.toString()
-                      }
-                      sb.append("• $key : $textValue\n")
+                  // 거리(dist) 추출: chipExpandedText가 있으면 우선 쓰고, 없으면 rawText에서 "남음" 제거
+                  val distStr = when {
+                      chipDist.isNotEmpty() -> chipDist
+                      rawText.isNotEmpty() -> rawText.replace("남음", "").trim()
+                      else -> "0m"
                   }
+                  // 안내문구(instruction) 추출
+                  val instructionStr = rawTitle.ifEmpty { "길안내 중" }
+
+                  val packetBytes = buildGlassNavPacketBytes(distStr, instructionStr, subText)
+                  val gmPacketHex = packetBytes.joinToString(" ") { "%02X".format(it) }
+
+                  val sb = StringBuilder()
+                  sb.append("[$nowTime 수신됨] ${if(isManual) "(수동스캔)" else ""}\n")
+                  sb.append("▶ 추출된 거리(dist): $distStr\n")
+                  sb.append("▶ 추출된 안내(text): $instructionStr\n")
+                  sb.append("----------------------------------\n")
+                  sb.append("★ 글라스 전송 패킷(Hex):\n$gmPacketHex\n")
+                  sb.append("----------------------------------\n")
 
                   prefs.edit().putString("last_log", sb.toString()).apply()
+                  sendBroadcast(Intent("com.example.naviparsertest.NAVI_LOG"))
 
-                  val intent = Intent("com.example.naviparsertest.NAVI_LOG")
-                  sendBroadcast(intent)
+                  // 선택된 스마트 글라스가 있으면 블루투스로 즉시 전송
+                  val glassMac = prefs.getString("glass_mac", null)
+                  if (!glassMac.isNullOrEmpty()) {
+                      sendPacketToGlasses(glassMac, packetBytes)
+                  }
               }
 
-              // naver_navigation.c 및 HUD_PROTOCOL.md 규격에 맞춘 바이너리 패킷 생성기
-              private fun buildGlassNavPacket(distRaw: String, textRaw: String, etaRaw: String): String {
-                  try {
-                      val appPayload = ByteArrayOutputStream()
-                      appPayload.write(2) // version = 2
+              @SuppressLint("MissingPermission")
+              private fun sendPacketToGlasses(macAddress: String, packet: ByteArray) {
+                  val prefs = getSharedPreferences("navi_prefs", Context.MODE_PRIVATE)
+                  thread {
+                      try {
+                          val adapter = BluetoothAdapter.getDefaultAdapter()
+                          val device = adapter.getRemoteDevice(macAddress)
 
-                      // 방향 판별 (0: 화살표, 1: 유턴, 2: 도착)
-                      val kind = when {
-                          textRaw.contains("유턴") -> 1
-                          textRaw.contains("도착") -> 2
-                          else -> 0
+                          // 1순위: PROTOCOL.md의 GM Classic SPP (0x7033) 전송 시도
+                          try {
+                              if (sppSocket == null || sppSocket?.isConnected == false) {
+                                  sppSocket = device.createRfcommSocketToServiceRecord(SPP_GM_UUID)
+                                  sppSocket?.connect()
+                              }
+                              sppSocket?.outputStream?.write(packet)
+                              sppSocket?.outputStream?.flush()
+                              updateBtStatus("SPP(7033) 전송 성공! (${SimpleDateFormat("HH:mm:ss", Locale.KOREA).format(Date())})")
+                              return@thread
+                          } catch (e1: Exception) {
+                              try { sppSocket?.close() } catch (ign: Exception) {}
+                              sppSocket = null
+                          }
+
+                          // 2순위: 기본 SPP (0x1101) 폴백 시도
+                          try {
+                              val fallbackSocket = device.createRfcommSocketToServiceRecord(SPP_FALLBACK_UUID)
+                              fallbackSocket.connect()
+                              fallbackSocket.outputStream.write(packet)
+                              fallbackSocket.outputStream.flush()
+                              sppSocket = fallbackSocket
+                              updateBtStatus("SPP(1101) 전송 성공! (${SimpleDateFormat("HH:mm:ss", Locale.KOREA).format(Date())})")
+                              return@thread
+                          } catch (e2: Exception) {
+                              // 3순위: BLE GATT (0x2021) 전송 시도
+                              sendViaBleGatt(device, packet)
+                          }
+                      } catch (e: Exception) {
+                          updateBtStatus("전송 실패: ${e.message}")
                       }
-                      appPayload.write(kind)
-
-                      // 회전 각도 (0: 직진, 90: 우회전, -90: 좌회전)
-                      val angle: Short = when {
-                          textRaw.contains("우회전") -> 90
-                          textRaw.contains("좌회전") -> -90
-                          textRaw.contains("오른쪽") -> 45
-                          textRaw.contains("왼쪽") -> -45
-                          else -> 0
-                      }
-                      appPayload.write((angle.toInt() shr 8) and 0xFF)
-                      appPayload.write(angle.toInt() and 0xFF)
-
-                      fun writeField(str: String, maxLen: Int) {
-                          val bytes = str.toByteArray(Charsets.UTF_8)
-                          val len = bytes.size.coerceAtMost(maxLen)
-                          appPayload.write(len)
-                          appPayload.write(bytes, 0, len)
-                      }
-
-                      writeField(distRaw.ifEmpty { "0m" }, 16)   // dist
-                      writeField(textRaw.ifEmpty { "안내중" }, 200) // text
-                      writeField("", 8)                          // speed
-                      writeField("", 8)                          // remain
-                      writeField(etaRaw, 8)                      // eta
-                      val clk = SimpleDateFormat("HH:mm", Locale.KOREA).format(Date())
-                      writeField(clk, 8)                         // clock
-                      appPayload.write(0)                        // npts = 0 (미니맵 생략)
-
-                      val appBytes = appPayload.toByteArray()
-                      val n = appBytes.size
-                      val gmLen = 19 + n
-
-                      // HUD_PROTOCOL.md의 Application-message envelope 조립
-                      val frame = ByteArrayOutputStream()
-                      frame.write(0xFA)
-                      frame.write((gmLen shr 16) and 0xFF)
-                      frame.write((gmLen shr 8) and 0xFF)
-                      frame.write(gmLen and 0xFF)
-                      frame.write(0x01) // event ID
-                      frame.write(0x0F) // GM service 0F
-                      frame.write(0x28) // command 28
-                      
-                      // Channel TLV: 07 00 00 02 4E 56 (NAV_CHANNEL = 0x4E56)
-                      frame.write(byteArrayOf(0x07, 0x00, 0x00, 0x02, 0x4E, 0x56))
-                      
-                      // Bytes TLV: 01 + 24-bit length + appBytes
-                      frame.write(0x01)
-                      frame.write((n shr 16) and 0xFF)
-                      frame.write((n shr 8) and 0xFF)
-                      frame.write(n and 0xFF)
-                      frame.write(appBytes)
-
-                      val frameWithoutSum = frame.toByteArray()
-                      var sum = 0
-                      for (b in frameWithoutSum) {
-                          sum = (sum + (b.toInt() and 0xFF)) and 0xFFFF
-                      }
-                      frame.write((sum shr 8) and 0xFF)
-                      frame.write(sum and 0xFF)
-
-                      return frame.toByteArray().joinToString(" ") { "%02X".format(it) }
-                  } catch (e: Exception) {
-                      return "패킷 생성 실패: ${e.message}"
                   }
+              }
+
+              @SuppressLint("MissingPermission")
+              private fun sendViaBleGatt(device: android.bluetooth.BluetoothDevice, packet: ByteArray) {
+                  updateBtStatus("BLE GATT(2021) 연결 및 전송 시도 중...")
+                  device.connectGatt(this, false, object : BluetoothGattCallback() {
+                      override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+                          if (newState == BluetoothProfile.STATE_CONNECTED) {
+                              gatt.requestMtu(512)
+                          } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                              gatt.close()
+                          }
+                      }
+
+                      override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+                          gatt.discoverServices()
+                      }
+
+                      override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+                          var writeChar: BluetoothGattCharacteristic? = null
+                          var notifyChar: BluetoothGattCharacteristic? = null
+
+                          for (service in gatt.services) {
+                              for (chara in service.characteristics) {
+                                  if (chara.uuid == BLE_WRITE_UUID) writeChar = chara
+                                  if (chara.uuid == BLE_NOTIFY_UUID) notifyChar = chara
+                              }
+                          }
+
+                          if (writeChar == null) {
+                              updateBtStatus("BLE 실패: 0x2021 특성을 찾을 수 없음")
+                              gatt.disconnect()
+                              return
+                          }
+
+                          // BLUETOOTH_DEVELOPER_GUIDE.md: 0x2022 알림 구독 후 0x2021에 Write 수행
+                          if (notifyChar != null) {
+                              gatt.setCharacteristicNotification(notifyChar, true)
+                              val desc = notifyChar.getDescriptor(CCCD_UUID)
+                              if (desc != null) {
+                                  desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                                  gatt.writeDescriptor(desc)
+                                  return
+                              }
+                          }
+
+                          writeChar.value = packet
+                          gatt.writeCharacteristic(writeChar)
+                      }
+
+                      override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+                          for (service in gatt.services) {
+                              val writeChar = service.getCharacteristic(BLE_WRITE_UUID)
+                              if (writeChar != null) {
+                                  writeChar.value = packet
+                                  gatt.writeCharacteristic(writeChar)
+                                  break
+                              }
+                          }
+                      }
+
+                      override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+                          if (status == BluetoothGatt.GATT_SUCCESS) {
+                              updateBtStatus("BLE(2021) 전송 성공! (${SimpleDateFormat("HH:mm:ss", Locale.KOREA).format(Date())})")
+                          } else {
+                              updateBtStatus("BLE Write 에러 코드: $status")
+                          }
+                      }
+                  })
+              }
+
+              private fun updateBtStatus(msg: String) {
+                  val prefs = getSharedPreferences("navi_prefs", Context.MODE_PRIVATE)
+                  prefs.edit().putString("bt_status", msg).apply()
+                  sendBroadcast(Intent("com.example.naviparsertest.NAVI_LOG"))
+              }
+
+              private fun buildGlassNavPacketBytes(distRaw: String, textRaw: String, etaRaw: String): ByteArray {
+                  val appPayload = ByteArrayOutputStream()
+                  appPayload.write(2) // version = 2
+
+                  val kind = when {
+                      textRaw.contains("유턴") -> 1
+                      textRaw.contains("도착") -> 2
+                      else -> 0
+                  }
+                  appPayload.write(kind)
+
+                  val angle: Short = when {
+                      textRaw.contains("우회전") -> 90
+                      textRaw.contains("좌회전") -> -90
+                      textRaw.contains("오른쪽") -> 45
+                      textRaw.contains("왼쪽") -> -45
+                      else -> 0
+                  }
+                  appPayload.write((angle.toInt() shr 8) and 0xFF)
+                  appPayload.write(angle.toInt() and 0xFF)
+
+                  fun writeField(str: String, maxLen: Int) {
+                      val bytes = str.toByteArray(Charsets.UTF_8)
+                      val len = bytes.size.coerceAtMost(maxLen)
+                      appPayload.write(len)
+                      appPayload.write(bytes, 0, len)
+                  }
+
+                  writeField(distRaw.ifEmpty { "0m" }, 16)
+                  writeField(textRaw.ifEmpty { "안내중" }, 200)
+                  writeField("", 8)
+                  writeField("", 8)
+                  writeField(etaRaw, 8)
+                  val clk = SimpleDateFormat("HH:mm", Locale.KOREA).format(Date())
+                  writeField(clk, 8)
+                  appPayload.write(0)
+
+                  val appBytes = appPayload.toByteArray()
+                  val n = appBytes.size
+                  val gmLen = 19 + n
+
+                  val frame = ByteArrayOutputStream()
+                  frame.write(0xFA)
+                  frame.write((gmLen shr 16) and 0xFF)
+                  frame.write((gmLen shr 8) and 0xFF)
+                  frame.write(gmLen and 0xFF)
+                  frame.write(eventSeq and 0xFF)
+                  eventSeq = (eventSeq % 250) + 1
+                  frame.write(0x0F)
+                  frame.write(0x28)
+
+                  frame.write(byteArrayOf(0x07, 0x00, 0x00, 0x02, 0x4E, 0x56))
+
+                  frame.write(0x01)
+                  frame.write((n shr 16) and 0xFF)
+                  frame.write((n shr 8) and 0xFF)
+                  frame.write(n and 0xFF)
+                  frame.write(appBytes)
+
+                  val frameWithoutSum = frame.toByteArray()
+                  var sum = 0
+                  for (b in frameWithoutSum) {
+                      sum = (sum + (b.toInt() and 0xFF)) and 0xFFFF
+                  }
+                  frame.write((sum shr 8) and 0xFF)
+                  frame.write(sum and 0xFF)
+
+                  return frame.toByteArray()
               }
           }
           EOF
@@ -346,8 +543,8 @@ jobs:
                   applicationId "com.example.naviparsertest"
                   minSdk 24
                   targetSdk 33
-                  versionCode 2
-                  versionName "2.0"
+                  versionCode 3
+                  versionName "3.0"
               }
           }
           dependencies {
@@ -388,5 +585,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug-v2
+          name: app-debug-v3
           path: app/build/outputs/apk/debug/app-debug.apk
