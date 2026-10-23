@@ -15,21 +15,121 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Create Android Project Structure
+      - name: Create Project Files Directly
         run: |
+          # 1. 안드로이드 필수 폴더 생성
           mkdir -p app/src/main/java/com/example/naviparsertest
           mkdir -p app/src/main/res
-          
-          if [ -f MainActivity.kt ]; then mv MainActivity.kt app/src/main/java/com/example/naviparsertest/; fi
-          if [ -f NaviNotificationListener.kt ]; then mv NaviNotificationListener.kt app/src/main/java/com/example/naviparsertest/; fi
-          if [ -f AndroidManifest.xml ]; then mv AndroidManifest.xml app/src/main/res/; fi
 
+          # 2. AndroidManifest.xml 직접 생성
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.example.naviparsertest">
+
+              <application
+                  android:allowBackup="true"
+                  android:label="네이버길안내테스트"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".NaviNotificationListener"
+                      android:label="네이버길안내수집기"
+                      android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.service.notification.NotificationListenerService" />
+                      </intent-filter>
+                  </service>
+
+              </application>
+          </manifest>
+          EOF
+
+          # 3. MainActivity.kt 직접 생성
+          cat << 'EOF' > app/src/main/java/com/example/naviparsertest/MainActivity.kt
+          package com.example.naviparsertest
+
+          import android.content.Intent
+          import android.os.Bundle
+          import android.provider.Settings
+          import android.view.Gravity
+          import android.widget.Button
+          import android.widget.LinearLayout
+          import android.widget.TextView
+          import androidx.appcompat.app.AppCompatActivity
+
+          class MainActivity : AppCompatActivity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  val layout = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      setPadding(50, 50, 50, 50)
+                  }
+                  val guideText = TextView(this).apply {
+                      text = "1. 아래 버튼을 눌러 권한 설정 화면으로 이동하세요.\n\n2. '네이버길안내테스트' 스위치를 켜주세요."
+                      textSize = 16f
+                  }
+                  val permissionButton = Button(this).apply {
+                      text = "알림 읽기 권한 켜러 가기"
+                      setOnClickListener {
+                          startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                      }
+                  }
+                  layout.addView(guideText)
+                  layout.addView(permissionButton)
+                  setContentView(layout)
+              }
+          }
+          EOF
+
+          # 4. NaviNotificationListener.kt 직접 생성
+          cat << 'EOF' > app/src/main/java/com/example/naviparsertest/NaviNotificationListener.kt
+          package com.example.naviparsertest
+
+          import android.service.notification.NotificationListenerService
+          import android.service.notification.StatusBarNotification
+          import android.util.Log
+
+          class NaviNotificationListener : NotificationListenerService() {
+              override fun onNotificationPosted(sbn: StatusBarNotification?) {
+                  super.onNotificationPosted(sbn)
+                  val packageName = sbn?.packageName ?: return
+                  if (packageName == "com.nhn.android.nmap") {
+                      val extras = sbn.notification?.extras ?: return
+                      Log.d("NAVER_NAVI", "================ [네이버 길안내 알림 도착] ================")
+                      for (key in extras.keySet()) {
+                          val value = extras.get(key)
+                          val textValue = when (value) {
+                              is Array<*> -> value.contentToString()
+                              else -> value.toString()
+                          }
+                          Log.d("NAVER_NAVI", "항목이름: $key  ===>  내용: $textValue")
+                      }
+                  }
+              }
+          }
+          EOF
+
+          # 5. Gradle 설정 파일 생성
           echo "include ':app'" > settings.gradle
           echo 'rootProject.name = "NaviTest"' > build.gradle
-          
+
           cat << 'EOF' > app/build.gradle
           plugins {
               id 'com.android.application'
+              id 'kotlin-android'
           }
           android {
               compileSdk 33
@@ -55,6 +155,7 @@ jobs:
               }
               dependencies {
                   classpath 'com.android.tools.build:gradle:7.4.2'
+                  classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:1.8.0"
               }
           }
           allprojects {
