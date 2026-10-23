@@ -17,6 +17,8 @@ jobs:
 
       - name: Create Project Files Directly
         run: |
+          mkdir -p app/src/main/res/mipmap-xxhdpi
+          cp icon.png app/src/main/res/mipmap-xxhdpi/ic_launcher.png
           mkdir -p app/src/main/java/com/example/naviparsertest
           mkdir -p app/src/main/res
 
